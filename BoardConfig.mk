@@ -107,5 +107,6 @@ TW_EXCLUDE_APEX := true
 TW_INCLUDE_REPACKTOOLS := true
 TW_DEVICE_VERSION := kansas-unofficial
 
-# Initial build intentionally excludes FBE decryption.
-TW_EXCLUDE_ENCRYPTED_BACKUPS := true
+# Initial build intentionally excludes data decryption support.
+# Leave TW_EXCLUDE_ENCRYPTED_BACKUPS unset on TeamWin android-12.1.
+# That branch incorrectly links libopenaes whenever the variable is nonempty.
