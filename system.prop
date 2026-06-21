@@ -1,0 +1,7 @@
+ro.hardware=mt6835
+ro.product.device=kansas
+ro.product.vendor.device=kansas
+ro.sf.lcd_density=280
+ro.recovery.ui.margin_height=165
+ro.hardware.gralloc=common
+ro.hardware.hwcomposer=mtk_common

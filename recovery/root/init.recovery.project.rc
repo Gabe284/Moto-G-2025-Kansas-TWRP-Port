@@ -1,0 +1,3 @@
+# Motorola Kansas TWRP project recovery hooks.
+#
+# Hardware initialization is retained in the stock platform vendor ramdisk.

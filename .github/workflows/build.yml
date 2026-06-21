@@ -1,0 +1,174 @@
+name: Build Kansas TWRP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out device tree
+        uses: actions/checkout@v4
+
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL \
+            || true
+
+          sudo docker image prune --all --force || true
+          df -h
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            git-core \
+            gnupg \
+            flex \
+            bison \
+            build-essential \
+            zip \
+            curl \
+            zlib1g-dev \
+            gcc-multilib \
+            g++-multilib \
+            libc6-dev-i386 \
+            lib32ncurses-dev \
+            x11proto-core-dev \
+            libx11-dev \
+            lib32z1-dev \
+            libgl1-mesa-dev \
+            libxml2-utils \
+            xsltproc \
+            unzip \
+            fontconfig \
+            python3 \
+            python-is-python3 \
+            rsync \
+            libssl-dev \
+            liblz4-tool \
+            zstd
+
+      - name: Install Repo
+        shell: bash
+        run: |
+          mkdir -p "$HOME/bin"
+
+          curl -fsSL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+
+          chmod 755 "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Initialize and synchronize TWRP
+        shell: bash
+        run: |
+          mkdir -p twrp-src
+          cd twrp-src
+
+          repo init \
+            --depth=1 \
+            -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+            -b twrp-12.1
+
+          repo sync \
+            -c \
+            --force-sync \
+            --no-clone-bundle \
+            --no-tags \
+            -j2
+
+      - name: Install Kansas device tree
+        shell: bash
+        run: |
+          mkdir -p twrp-src/device/motorola/kansas
+
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='twrp-src/' \
+            ./ \
+            twrp-src/device/motorola/kansas/
+
+      - name: Build vendor_boot
+        shell: bash
+        run: |
+          cd twrp-src
+
+          export ALLOW_MISSING_DEPENDENCIES=true
+
+          source build/envsetup.sh
+          lunch twrp_kansas-eng
+
+          mka vendorbootimage -j2 2>&1 |
+            tee build-kansas.log
+
+      - name: Verify vendor_boot
+        shell: bash
+        run: |
+          cd twrp-src
+
+          IMAGE="out/target/product/kansas/vendor_boot.img"
+          LIMIT=67108864
+
+          test -f "$IMAGE"
+
+          SIZE="$(stat -c %s "$IMAGE")"
+
+          echo "vendor_boot image size: $SIZE"
+          echo "vendor_boot partition limit: $LIMIT"
+
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "ERROR: vendor_boot.img exceeds partition size"
+            exit 1
+          fi
+
+          rm -rf verify
+          mkdir -p verify
+
+          python3 system/tools/mkbootimg/unpack_bootimg.py \
+            --boot_img "$IMAGE" \
+            --out verify \
+            2>&1 |
+            tee verify-report.txt
+
+          grep -q \
+            'vendor boot image header version: 4' \
+            verify-report.txt
+
+          grep -q \
+            'type: 0x1' \
+            verify-report.txt
+
+          grep -q \
+            'type: 0x2' \
+            verify-report.txt
+
+          sha256sum "$IMAGE" |
+            tee vendor_boot.sha256
+
+      - name: Upload unflashed build
+        uses: actions/upload-artifact@v4
+        with:
+          name: kansas-twrp-unflashed
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            twrp-src/out/target/product/kansas/vendor_boot.img
+            twrp-src/vendor_boot.sha256
+            twrp-src/verify-report.txt
+            twrp-src/build-kansas.log
