@@ -16,7 +16,10 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/recovery/root/lib/modules/modules.load.recovery:$(TARGET_COPY_OUT_RECOVERY)/root/lib/modules/modules.load.recovery \
     $(LOCAL_PATH)/recovery/root/lib/modules/modules.dep:$(TARGET_COPY_OUT_RECOVERY)/root/lib/modules/modules.dep \
     $(LOCAL_PATH)/recovery/root/lib/modules/modules.alias:$(TARGET_COPY_OUT_RECOVERY)/root/lib/modules/modules.alias \
-    $(LOCAL_PATH)/recovery/root/lib/modules/sensors_class.ko:$(TARGET_COPY_OUT_RECOVERY)/root/lib/modules/sensors_class.ko \
-    $(LOCAL_PATH)/recovery/root/lib/modules/focaltech_0flash_mmi_v3.ko:$(TARGET_COPY_OUT_RECOVERY)/root/lib/modules/focaltech_0flash_mmi_v3.ko \
     $(LOCAL_PATH)/recovery/root/vendor/firmware/focaltech_ts_fw_boe_ft8057m.bin:$(TARGET_COPY_OUT_RECOVERY)/root/vendor/firmware/focaltech_ts_fw_boe_ft8057m.bin \
     $(LOCAL_PATH)/recovery/root/vendor/firmware/focaltech_ts_fw_boe_ft8057s.bin:$(TARGET_COPY_OUT_RECOVERY)/root/vendor/firmware/focaltech_ts_fw_boe_ft8057s.bin
+
+# Kansas recovery kernel modules
+PRODUCT_PACKAGES += \
+    kansas_sensors_class_ko \
+    kansas_focaltech_0flash_ko
