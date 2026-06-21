@@ -1,7 +1,8 @@
 LOCAL_PATH := device/motorola/kansas
 
 PRODUCT_USE_DYNAMIC_PARTITIONS := true
-PRODUCT_SHIPPING_API_LEVEL := 33
+# PRODUCT_SHIPPING_API_LEVEL is intentionally unset for the twrp-12.1 recovery-only build.
+# Motorola stock vendor firmware is Android 13/API 33, while this TWRP branch exposes SystemSDK 32.
 
 PRODUCT_PROPERTY_OVERRIDES += \
     ro.virtual_ab.enabled=true \
