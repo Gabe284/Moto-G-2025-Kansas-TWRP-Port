@@ -6,3 +6,5 @@
 *.before-base-fix.*
 
 *.before-openaes-fix.*
+
+*.before-vendor-path-fix.*

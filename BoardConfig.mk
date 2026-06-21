@@ -18,6 +18,9 @@ TARGET_KERNEL_ARCH := arm64
 TARGET_KERNEL_HEADER_ARCH := arm64
 TARGET_BOARD_PLATFORM := mt6835
 
+# Kansas uses a dedicated vendor partition.
+TARGET_COPY_OUT_VENDOR := vendor
+
 # A/B
 AB_OTA_UPDATER := true
 
