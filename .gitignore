@@ -2,3 +2,5 @@
 *.before-module-fix.*
 
 *.before-disk-fix.*
+
+*.before-base-fix.*
