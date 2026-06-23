@@ -15,8 +15,6 @@ vendor /vendor erofs ro wait,slotselect,avb,logical,first_stage_mount
 vendor /vendor ext4 ro wait,slotselect,avb,logical,first_stage_mount
 
 
-product /product erofs ro wait,slotselect,avb,logical,first_stage_mount
-product /product ext4 ro wait,slotselect,avb,logical,first_stage_mount
 
 
 
