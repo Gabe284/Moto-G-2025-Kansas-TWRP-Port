@@ -197,6 +197,104 @@ jobs:
           mka vendorbootimage -j1 2>&1 |
             tee build-kansas.log
 
+      - name: Repack vendor_boot explicitly
+        shell: bash
+        run: |
+          cd "$TWRP_SRC"
+
+          OUT="out/target/product/kansas"
+          IMAGE="$OUT/vendor_boot.img"
+          TMP_IMAGE="$OUT/vendor_boot.repacked.img"
+          PLATFORM_RAMDISK="$GITHUB_WORKSPACE/prebuilt/vendor_ramdisk_platform.lz4"
+          STOCK_DTB="$GITHUB_WORKSPACE/prebuilt/dtb.img"
+          LIMIT=67108864
+          PLATFORM_SHA256="ac6c150c2ce9d8e82840547d5c70b8a411b160f9e6f886575fcbf5ef3df92f4f"
+          DTB_SHA256="38692d745df0331434780944de62f1b4e5c5b1a0f72ece8a773efa673aad5a08"
+
+          test -s "$IMAGE"
+          test -s "$PLATFORM_RAMDISK"
+          test -s "$STOCK_DTB"
+
+          echo "$PLATFORM_SHA256  $PLATFORM_RAMDISK" |
+            sha256sum --check --strict
+
+          echo "$DTB_SHA256  $STOCK_DTB" |
+            sha256sum --check --strict
+
+          RECOVERY_RAMDISK=""
+
+          for candidate in \
+            "$OUT/obj/PACKAGING/recovery_ramdisk_intermediates/recovery_ramdisk.cpio.lz4" \
+            "$OUT/recovery_ramdisk.cpio.lz4" \
+            "$OUT/ramdisk-recovery.cpio.lz4"
+          do
+            if [ -s "$candidate" ]; then
+              RECOVERY_RAMDISK="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$RECOVERY_RAMDISK" ]; then
+            mapfile -t recovery_candidates < <(
+              find "$OUT" \
+                -type f \
+                \( \
+                  -name 'recovery_ramdisk.cpio.lz4' \
+                  -o -name 'ramdisk-recovery.cpio.lz4' \
+                  -o -name '*recovery*ramdisk*.lz4' \
+                \) \
+                -size +4c |
+                sort
+            )
+
+            if [ "${#recovery_candidates[@]}" -eq 1 ]; then
+              RECOVERY_RAMDISK="${recovery_candidates[0]}"
+            else
+              echo "ERROR: expected exactly one generated recovery ramdisk candidate"
+              printf '%s\n' "${recovery_candidates[@]}"
+              exit 1
+            fi
+          fi
+
+          RECOVERY_SIZE="$(stat -c %s "$RECOVERY_RAMDISK")"
+
+          if [ "$RECOVERY_SIZE" -le 4 ]; then
+            echo "ERROR: recovery ramdisk is empty or malformed: $RECOVERY_RAMDISK"
+            exit 1
+          fi
+
+          echo "Using generated recovery ramdisk: $RECOVERY_RAMDISK ($RECOVERY_SIZE bytes)"
+
+          rm -f "$TMP_IMAGE"
+
+          python3 system/tools/mkbootimg/mkbootimg.py \
+            --vendor_boot "$TMP_IMAGE" \
+            --header_version 4 \
+            --pagesize 4096 \
+            --base 0x40000000 \
+            --kernel_offset 0x00000000 \
+            --ramdisk_offset 0x26f00000 \
+            --tags_offset 0x07c80000 \
+            --dtb_offset 0x07c80000 \
+            --dtb "$STOCK_DTB" \
+            --vendor_cmdline "bootopt=64S3,32N2,64N2 mem.enable_mglru=1 loglevel=4 initcall_debug=0" \
+            --board "" \
+            --vendor_ramdisk_fragment "$PLATFORM_RAMDISK" \
+            --ramdisk_type PLATFORM \
+            --ramdisk_name platform \
+            --vendor_ramdisk_fragment "$RECOVERY_RAMDISK" \
+            --ramdisk_type RECOVERY \
+            --ramdisk_name recovery
+
+          SIZE="$(stat -c %s "$TMP_IMAGE")"
+
+          if [ "$SIZE" -ge "$LIMIT" ]; then
+            echo "ERROR: repacked vendor_boot.img is not below partition size"
+            exit 1
+          fi
+
+          mv -f "$TMP_IMAGE" "$IMAGE"
+
       - name: Verify vendor_boot
         shell: bash
         run: |
@@ -205,6 +303,8 @@ jobs:
           IMAGE="out/target/product/kansas/vendor_boot.img"
           LIMIT=67108864
           ARTIFACTS="$GITHUB_WORKSPACE/artifacts"
+          PLATFORM_SHA256="ac6c150c2ce9d8e82840547d5c70b8a411b160f9e6f886575fcbf5ef3df92f4f"
+          DTB_SHA256="38692d745df0331434780944de62f1b4e5c5b1a0f72ece8a773efa673aad5a08"
 
           test -f "$IMAGE"
 
@@ -213,7 +313,7 @@ jobs:
           echo "vendor_boot image size: $SIZE"
           echo "vendor_boot partition limit: $LIMIT"
 
-          if [ "$SIZE" -gt "$LIMIT" ]; then
+          if [ "$SIZE" -ge "$LIMIT" ]; then
             echo "ERROR: vendor_boot.img exceeds partition size"
             exit 1
           fi
@@ -231,13 +331,124 @@ jobs:
             'vendor boot image header version: 4' \
             "$ARTIFACTS/verify-report.txt"
 
-          grep -q \
-            'type: 0x1' \
-            "$ARTIFACTS/verify-report.txt"
+          python3 - "$IMAGE" "$PLATFORM_SHA256" "$DTB_SHA256" "$LIMIT" <<'PY'
+          import hashlib
+          import struct
+          import sys
 
-          grep -q \
-            'type: 0x2' \
-            "$ARTIFACTS/verify-report.txt"
+          image_path, platform_sha256, dtb_sha256, limit = sys.argv[1:]
+          limit = int(limit)
+
+          with open(image_path, "rb") as image:
+              data = image.read()
+
+          def fail(message):
+              print(f"ERROR: {message}")
+              sys.exit(1)
+
+          def align(value, page_size):
+              return ((value + page_size - 1) // page_size) * page_size
+
+          if len(data) >= limit:
+              fail(f"vendor_boot.img is {len(data)} bytes, not below {limit}")
+
+          if len(data) < 2128:
+              fail("vendor_boot.img is too small for a v4 header")
+
+          if data[:8] != b"VNDRBOOT":
+              fail("vendor_boot magic is invalid")
+
+          header_version = struct.unpack_from("<I", data, 8)[0]
+          page_size = struct.unpack_from("<I", data, 12)[0]
+          vendor_ramdisk_size = struct.unpack_from("<I", data, 24)[0]
+          header_size = struct.unpack_from("<I", data, 2096)[0]
+          dtb_size = struct.unpack_from("<I", data, 2100)[0]
+          table_size = struct.unpack_from("<I", data, 2112)[0]
+          entry_count = struct.unpack_from("<I", data, 2116)[0]
+          entry_size = struct.unpack_from("<I", data, 2120)[0]
+
+          if header_version != 4:
+              fail(f"vendor_boot header version is {header_version}, expected 4")
+
+          if page_size <= 0:
+              fail(f"invalid page size {page_size}")
+
+          if header_size < 2128:
+              fail(f"invalid v4 header size {header_size}")
+
+          if entry_count != 2:
+              fail(f"fragment count is {entry_count}, expected 2")
+
+          if entry_size < 108:
+              fail(f"vendor ramdisk table entry size is {entry_size}, expected at least 108")
+
+          if table_size < entry_count * entry_size:
+              fail("vendor ramdisk table is smaller than its declared entries")
+
+          ramdisk_offset = align(header_size, page_size)
+          dtb_offset = ramdisk_offset + align(vendor_ramdisk_size, page_size)
+          table_offset = dtb_offset + align(dtb_size, page_size)
+
+          if table_offset + table_size > len(data):
+              fail("vendor ramdisk table extends past end of image")
+
+          if ramdisk_offset + vendor_ramdisk_size > len(data):
+              fail("vendor ramdisk data extends past end of image")
+
+          if dtb_offset + dtb_size > len(data):
+              fail("DTB extends past end of image")
+
+          dtb = data[dtb_offset:dtb_offset + dtb_size]
+          actual_dtb_sha256 = hashlib.sha256(dtb).hexdigest()
+
+          if actual_dtb_sha256 != dtb_sha256:
+              fail(f"DTB SHA-256 is {actual_dtb_sha256}, expected {dtb_sha256}")
+
+          expected = [
+              ("platform", 1, platform_sha256),
+              ("recovery", 2, None),
+          ]
+
+          for index, (expected_name, expected_type, expected_sha256) in enumerate(expected):
+              entry = table_offset + index * entry_size
+              fragment_size, fragment_offset, fragment_type = struct.unpack_from("<III", data, entry)
+              fragment_name = (
+                  data[entry + 12:entry + 44]
+                  .split(b"\0", 1)[0]
+                  .decode("ascii", errors="replace")
+              )
+
+              if fragment_name != expected_name:
+                  fail(f"fragment {index} name is {fragment_name!r}, expected {expected_name!r}")
+
+              if fragment_type != expected_type:
+                  fail(f"fragment {index} type is {fragment_type}, expected {expected_type}")
+
+              if fragment_size <= 4:
+                  fail(f"fragment {index} size is {fragment_size}, expected greater than 4")
+
+              if fragment_offset + fragment_size > vendor_ramdisk_size:
+                  fail(f"fragment {index} extends past vendor ramdisk section")
+
+              fragment = data[
+                  ramdisk_offset + fragment_offset:
+                  ramdisk_offset + fragment_offset + fragment_size
+              ]
+
+              if len(fragment) != fragment_size:
+                  fail(f"fragment {index} data is truncated")
+
+              if expected_sha256:
+                  actual_sha256 = hashlib.sha256(fragment).hexdigest()
+
+                  if actual_sha256 != expected_sha256:
+                      fail(
+                          f"fragment {index} SHA-256 is {actual_sha256}, "
+                          f"expected {expected_sha256}"
+                      )
+
+          print("vendor_boot fragment validation passed")
+          PY
 
           cp -f \
             "$IMAGE" \
