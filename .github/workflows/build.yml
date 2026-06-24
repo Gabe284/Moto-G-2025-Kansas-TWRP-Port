@@ -399,12 +399,12 @@ jobs:
             --dtb "$STOCK_DTB" \
             --vendor_cmdline "bootopt=64S3,32N2,64N2 mem.enable_mglru=1 loglevel=4 initcall_debug=0" \
             --board "" \
-            --vendor_ramdisk_fragment "$PLATFORM_RAMDISK" \
             --ramdisk_type PLATFORM \
             --ramdisk_name platform \
-            --vendor_ramdisk_fragment "$RECOVERY_RAMDISK" \
+            --vendor_ramdisk_fragment "$PLATFORM_RAMDISK" \
             --ramdisk_type RECOVERY \
-            --ramdisk_name recovery
+            --ramdisk_name recovery \
+            --vendor_ramdisk_fragment "$RECOVERY_RAMDISK"
 
           SIZE="$(stat -c %s "$TMP_IMAGE")"
 
