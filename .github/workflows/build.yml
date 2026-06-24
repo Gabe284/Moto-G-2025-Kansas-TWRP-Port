@@ -221,49 +221,169 @@ jobs:
           echo "$DTB_SHA256  $STOCK_DTB" |
             sha256sum --check --strict
 
-          RECOVERY_RAMDISK=""
+          TMP_UNPACK="$OUT/vendor_boot.unpack"
+          RECOVERY_RAMDISK="$TMP_UNPACK/recovery.vendor_ramdisk_fragment.lz4"
 
-          for candidate in \
-            "$OUT/obj/PACKAGING/recovery_ramdisk_intermediates/recovery_ramdisk.cpio.lz4" \
-            "$OUT/recovery_ramdisk.cpio.lz4" \
-            "$OUT/ramdisk-recovery.cpio.lz4"
-          do
-            if [ -s "$candidate" ]; then
-              RECOVERY_RAMDISK="$candidate"
-              break
-            fi
-          done
+          rm -rf "$TMP_UNPACK"
+          mkdir -p "$TMP_UNPACK"
 
-          if [ -z "$RECOVERY_RAMDISK" ]; then
-            mapfile -t recovery_candidates < <(
-              find "$OUT" \
-                -type f \
-                \( \
-                  -name 'recovery_ramdisk.cpio.lz4' \
-                  -o -name 'ramdisk-recovery.cpio.lz4' \
-                  -o -name '*recovery*ramdisk*.lz4' \
-                \) \
-                -size +4c |
-                sort
-            )
+          python3 system/tools/mkbootimg/unpack_bootimg.py \
+            --boot_img "$IMAGE" \
+            --out "$TMP_UNPACK" \
+            2>&1 |
+            tee "$TMP_UNPACK/unpack-report.txt"
 
-            if [ "${#recovery_candidates[@]}" -eq 1 ]; then
-              RECOVERY_RAMDISK="${recovery_candidates[0]}"
-            else
-              echo "ERROR: expected exactly one generated recovery ramdisk candidate"
-              printf '%s\n' "${recovery_candidates[@]}"
-              exit 1
-            fi
-          fi
+          python3 - "$IMAGE" "$TMP_UNPACK" "$RECOVERY_RAMDISK" <<'PY'
+          import hashlib
+          import os
+          import struct
+          import sys
+
+          image_path, unpack_dir, recovery_path = sys.argv[1:]
+
+          RAMDISK_TYPES = {
+              1: "PLATFORM",
+              2: "RECOVERY",
+              3: "DLKM",
+          }
+
+          def fail(message):
+              print(f"ERROR: {message}")
+              sys.exit(1)
+
+          def align(value, page_size):
+              return ((value + page_size - 1) // page_size) * page_size
+
+          with open(image_path, "rb") as image:
+              data = image.read()
+
+          if len(data) < 2128:
+              fail("vendor_boot.img is too small for a v4 header")
+
+          if data[:8] != b"VNDRBOOT":
+              fail("vendor_boot magic is invalid")
+
+          header_version = struct.unpack_from("<I", data, 8)[0]
+          page_size = struct.unpack_from("<I", data, 12)[0]
+          vendor_ramdisk_size = struct.unpack_from("<I", data, 24)[0]
+          header_size = struct.unpack_from("<I", data, 2096)[0]
+          dtb_size = struct.unpack_from("<I", data, 2100)[0]
+          table_size = struct.unpack_from("<I", data, 2112)[0]
+          entry_count = struct.unpack_from("<I", data, 2116)[0]
+          entry_size = struct.unpack_from("<I", data, 2120)[0]
+
+          if header_version != 4:
+              fail(f"vendor_boot header version is {header_version}, expected 4")
+
+          if page_size <= 0:
+              fail(f"invalid page size {page_size}")
+
+          if header_size < 2128:
+              fail(f"invalid v4 header size {header_size}")
+
+          if entry_size < 108:
+              fail(f"vendor ramdisk table entry size is {entry_size}, expected at least 108")
+
+          if table_size < entry_count * entry_size:
+              fail("vendor ramdisk table is smaller than its declared entries")
+
+          ramdisk_offset = align(header_size, page_size)
+          dtb_offset = ramdisk_offset + align(vendor_ramdisk_size, page_size)
+          table_offset = dtb_offset + align(dtb_size, page_size)
+
+          if table_offset + table_size > len(data):
+              fail("vendor ramdisk table extends past end of image")
+
+          if ramdisk_offset + vendor_ramdisk_size > len(data):
+              fail("vendor ramdisk data extends past end of image")
+
+          unpacked_files = []
+          for root, _, filenames in os.walk(unpack_dir):
+              for filename in filenames:
+                  path = os.path.join(root, filename)
+                  if not os.path.isfile(path):
+                      continue
+
+                  with open(path, "rb") as unpacked:
+                      payload = unpacked.read()
+
+                  unpacked_files.append({
+                      "path": os.path.relpath(path, unpack_dir),
+                      "size": len(payload),
+                      "sha256": hashlib.sha256(payload).hexdigest(),
+                  })
+
+          fragments = []
+          for index in range(entry_count):
+              entry = table_offset + index * entry_size
+              fragment_size, fragment_offset, fragment_type = struct.unpack_from("<III", data, entry)
+              fragment_name = (
+                  data[entry + 12:entry + 44]
+                  .split(b"\0", 1)[0]
+                  .decode("ascii", errors="replace")
+              )
+
+              if fragment_offset + fragment_size > vendor_ramdisk_size:
+                  fail(f"fragment {index} extends past vendor ramdisk section")
+
+              fragment = data[
+                  ramdisk_offset + fragment_offset:
+                  ramdisk_offset + fragment_offset + fragment_size
+              ]
+              fragment_sha256 = hashlib.sha256(fragment).hexdigest()
+              matching_files = sorted(
+                  item["path"]
+                  for item in unpacked_files
+                  if item["size"] == fragment_size and item["sha256"] == fragment_sha256
+              )
+
+              fragments.append({
+                  "index": index,
+                  "name": fragment_name,
+                  "type": fragment_type,
+                  "type_name": RAMDISK_TYPES.get(fragment_type, f"UNKNOWN({fragment_type})"),
+                  "size": fragment_size,
+                  "payload": fragment,
+                  "files": matching_files,
+              })
+
+          print("Unpacked vendor ramdisk fragments:")
+          for fragment in fragments:
+              files = ", ".join(fragment["files"]) if fragment["files"] else "<no separate unpacked file>"
+              print(
+                  f"  index={fragment['index']} "
+                  f"name={fragment['name']!r} "
+                  f"type={fragment['type_name']}({fragment['type']}) "
+                  f"size={fragment['size']} "
+                  f"files={files}"
+              )
+
+          recovery_fragments = [
+              fragment for fragment in fragments
+              if fragment["name"] == "recovery" and fragment["type"] == 2
+          ]
+
+          if not recovery_fragments:
+              fail("missing recovery vendor ramdisk fragment")
+
+          if len(recovery_fragments) != 1:
+              fail(f"found {len(recovery_fragments)} recovery vendor ramdisk fragments, expected exactly one")
+
+          recovery_fragment = recovery_fragments[0]
+
+          if recovery_fragment["size"] <= 4:
+              fail(
+                  "recovery vendor ramdisk fragment is empty or malformed: "
+                  f"{recovery_fragment['size']} bytes"
+              )
+
+          with open(recovery_path, "wb") as recovery:
+              recovery.write(recovery_fragment["payload"])
+          PY
 
           RECOVERY_SIZE="$(stat -c %s "$RECOVERY_RAMDISK")"
 
-          if [ "$RECOVERY_SIZE" -le 4 ]; then
-            echo "ERROR: recovery ramdisk is empty or malformed: $RECOVERY_RAMDISK"
-            exit 1
-          fi
-
-          echo "Using generated recovery ramdisk: $RECOVERY_RAMDISK ($RECOVERY_SIZE bytes)"
+          echo "Using extracted recovery ramdisk fragment: $RECOVERY_RAMDISK ($RECOVERY_SIZE bytes)"
 
           rm -f "$TMP_IMAGE"
 
