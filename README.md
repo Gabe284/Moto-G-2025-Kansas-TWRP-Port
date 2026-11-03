@@ -1,53 +1,73 @@
 # TWRP device tree for Motorola Kansas
 
-Initial experimental TWRP tree for the Motorola Moto G 2025
-XT2513-1, codename `kansas`.
+Experimental TWRP device tree for the Motorola Moto G 2025, model XT2513-1, codename `kansas`, MediaTek MT6835.
 
-## Layout
+## Device-tree design
 
-- Boot header version 4
-- Stock platform vendor-ramdisk fragment preserved
-- TWRP built as a separate type-2 recovery fragment
-- Stock slot-B kernel and init_boot remain unchanged
-- FocalTech SPI touchscreen modules included
-- FBE metadata decryption not yet supported
+- ARM64 target.
+- Android vendor_boot header version 4.
+- Motorola stock platform vendor-ramdisk fragment preserved.
+- TWRP built as a separate type-2 recovery ramdisk fragment.
+- Stock kernel, DTB, and init_boot are not rebuilt by this recovery-only workflow.
+- FocalTech SPI touchscreen kernel modules and firmware are included.
+- FBE and metadata decryption are not yet implemented or validated.
 
-## Build
+## Build locally
 
 ```sh
-repo init --depth=1 \
-  -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
-  -b twrp-12.1
-
+repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
 repo sync -c --force-sync --no-clone-bundle --no-tags
-
 source build/envsetup.sh
 export ALLOW_MISSING_DEPENDENCIES=true
 lunch twrp_kansas-eng
 mka vendorbootimage
-
-
-## Latest verified build
-
-The `fix/usb-display-product-v2` branch completed GitHub Actions run 12 successfully on 2026-06-24. The workflow completed all stages, including the vendor_boot build, explicit vendor_boot repack, structural validation, and artifact upload. The 14-day artifact retention period has elapsed, so the image is no longer available from that run. This confirms a successful CI build and image-structure checks, not a physical-device boot test.
-
-The development branch uses `RGBX_8888` for the recovery display and validates the vendor_boot v4 ramdisk table, fragment order, stock platform ramdisk SHA-256, stock DTB SHA-256, and the 64 MiB vendor_boot size limit. Continue from `fix/usb-display-product-v2`; do not replace its stock boot components with newly generated ones without device-specific evidence.
-
-## Collecting the next device-side validation data
-
-A read-only inventory script is available at `tools/collect-kansas-device-report.sh`. It records device identity properties, active slot, partition names and sizes, stock fstab entries, encryption/keymaster properties, display/backlight nodes, input devices, kernel modules, and USB state. It does not dump partitions or read personal files.
-
-From Termux, after cloning this repository:
-
-```sh
-cd ~/Moto-G-2025-Kansas-TWRP-Port
-git switch tools/device-validation-report
-git pull --ff-only
-su -c "sh /data/data/com.termux/files/home/Moto-G-2025-Kansas-TWRP-Port/tools/collect-kansas-device-report.sh"
 ```
 
-The report is written to `/sdcard/Download/kansas-twrp-device-report.txt`. Review it before sharing. The report is intended to guide the next configuration stage; it does not enable encryption support or flash anything.
+## Latest verified CI build
 
-## Safety
+The `fix/usb-display-product-v2` branch completed GitHub Actions run 12 successfully on 2026-06-24. All workflow stages completed, including the vendor_boot build, explicit vendor_boot repack, structural validation, and artifact upload. The 14-day artifact retention period has elapsed, so the image is no longer downloadable from that run.
 
-Do not flash the generated `vendor_boot.img` yet. First verify the image against the exact device's current stock vendor_boot, DTB, active slot, and partition layout. Keep a known-good stock boot/vendor_boot/init_boot backup for both slots before any recovery boot or flash test.
+This establishes that CI produced an image passing the workflow's structural checks. It does **not** establish that the image boots on physical hardware.
+
+That branch includes:
+- `RGBX_8888` recovery display format.
+- Explicit vendor_boot v4 repacking with ordered `platform` and `recovery` fragments.
+- Validation of the stock platform ramdisk and DTB SHA-256 hashes.
+- Validation of the recovery fragment name/type, fragment count, image header, and 64 MiB vendor_boot partition limit.
+
+Use `fix/usb-display-product-v2` as the integration baseline. Do not replace stock boot components or flash the image before matching it against the current device's stock images and partition layout.
+
+## Collect device-side validation data
+
+The read-only inventory script `tools/collect-kansas-device-report.sh` collects:
+- Device identity and active-slot properties.
+- Partition names, symlink targets, and available partition sizes.
+- Stock fstab entries and current mounts.
+- Encryption, Keymaster, Gatekeeper, and vold properties.
+- Display, backlight, touchscreen/input, and kernel-module information.
+- USB and ADB state.
+
+It does not dump partitions, extract encryption keys, modify device settings, or flash anything.
+
+From Termux, clone the repository if it is not already present, then run:
+
+```sh
+cd "$HOME"
+git clone https://github.com/Gabe284/Moto-G-2025-Kansas-TWRP-Port.git
+cd "$HOME/Moto-G-2025-Kansas-TWRP-Port"
+git fetch origin
+git switch tools/device-validation-report
+git pull --ff-only
+su -c "sh $HOME/Moto-G-2025-Kansas-TWRP-Port/tools/collect-kansas-device-report.sh"
+```
+
+The report is written to `/sdcard/Download/kansas-twrp-device-report.txt`. Review it before sharing.
+
+## Safety requirements
+
+1. Keep known-good stock backups of `boot`, `init_boot`, `vendor_boot`, `dtbo`, and relevant vbmeta partitions for both slots where available.
+2. Confirm the current active slot and exact partition sizes before any write operation.
+3. Validate the generated vendor_boot image against the current stock vendor_boot, DTB, and platform ramdisk.
+4. First test recovery using a supported temporary boot method if the device bootloader supports it. Do not assume `fastboot boot` is supported for this MediaTek device.
+5. Do not flash until recovery boot, touchscreen, USB/ADB, storage mounting, and normal Android reboot have been tested.
+6. Do not claim encryption support until FBE and metadata decryption have been demonstrated against the device's actual Android 16 userdata configuration.
