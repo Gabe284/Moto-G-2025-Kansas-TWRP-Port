@@ -2,6 +2,9 @@ name: Build Kansas TWRP
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - tools/device-validation-report
 
 permissions:
   contents: read
