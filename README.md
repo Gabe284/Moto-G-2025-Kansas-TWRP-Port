@@ -49,16 +49,22 @@ The read-only inventory script `tools/collect-kansas-device-report.sh` collects:
 
 It does not dump partitions, extract encryption keys, modify device settings, or flash anything.
 
-From Termux, clone the repository if it is not already present, then run:
+From Termux, run the following. It clones the repository only if needed, then checks out the validation branch:
 
 ```sh
-cd "$HOME"
-git clone https://github.com/Gabe284/Moto-G-2025-Kansas-TWRP-Port.git
-cd "$HOME/Moto-G-2025-Kansas-TWRP-Port"
+REPO="$HOME/Moto-G-2025-Kansas-TWRP-Port"
+if [ ! -d "$REPO/.git" ]; then
+    git clone https://github.com/Gabe284/Moto-G-2025-Kansas-TWRP-Port.git "$REPO"
+fi
+cd "$REPO" || exit 1
 git fetch origin
-git switch tools/device-validation-report
+if git show-ref --verify --quiet refs/heads/tools/device-validation-report; then
+    git switch tools/device-validation-report
+else
+    git switch --track -c tools/device-validation-report origin/tools/device-validation-report
+fi
 git pull --ff-only
-su -c "sh $HOME/Moto-G-2025-Kansas-TWRP-Port/tools/collect-kansas-device-report.sh"
+su -c "sh '$REPO/tools/collect-kansas-device-report.sh'"
 ```
 
 The report is written to `/sdcard/Download/kansas-twrp-device-report.txt`. Review it before sharing.
