@@ -84,7 +84,8 @@ jobs:
             rsync \
             libssl-dev \
             liblz4-tool \
-            zstd
+            zstd \
+            cpio
 
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
@@ -136,6 +137,20 @@ jobs:
 
           df -h "$TWRP_SRC"
 
+      - name: Restore TWRP source and compiler caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.TWRP_SRC }}/.repo/project-objects
+            ${{ env.TWRP_SRC }}/.repo/projects
+            ${{ env.TWRP_SRC }}/.repo/manifests
+            ${{ env.TWRP_SRC }}/.repo/manifests.git
+            ${{ env.TWRP_SRC }}/out/soong
+            ${{ env.TWRP_SRC }}/out/target/product/kansas/obj
+          key: kansas-twrp-12.1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            kansas-twrp-12.1-${{ runner.os }}-
+
       - name: Initialize and synchronize TWRP
         shell: bash
         run: |
@@ -153,7 +168,13 @@ jobs:
             --no-tags \
             --optimized-fetch \
             --prune \
-            -j1
+            -j2
+
+          repo manifest -r -o "$GITHUB_WORKSPACE/twrp-manifest-pinned.xml"
+
+          echo
+          echo "Pinned TWRP source revisions:"
+          sha256sum "$GITHUB_WORKSPACE/twrp-manifest-pinned.xml"
 
           echo
           echo "Storage after source synchronization:"
@@ -197,7 +218,7 @@ jobs:
           source build/envsetup.sh
           lunch twrp_kansas-eng
 
-          mka vendorbootimage -j1 2>&1 |
+          mka vendorbootimage -j2 2>&1 |
             tee build-kansas.log
 
       - name: Repack vendor_boot explicitly
@@ -403,7 +424,7 @@ jobs:
             --vendor_cmdline "bootopt=64S3,32N2,64N2 mem.enable_mglru=1 loglevel=4 initcall_debug=0" \
             --board "" \
             --ramdisk_type PLATFORM \
-            --ramdisk_name platform \
+            --ramdisk_name "" \
             --vendor_ramdisk_fragment "$PLATFORM_RAMDISK" \
             --ramdisk_type RECOVERY \
             --ramdisk_name recovery \
@@ -453,6 +474,19 @@ jobs:
           grep -q \
             'vendor boot image header version: 4' \
             "$ARTIFACTS/verify-report.txt"
+
+          for EXPECTED in \
+            'page size: 0x00001000' \
+            'kernel load address: 0x40000000' \
+            'ramdisk load address: 0x66f00000' \
+            'kernel tags load address: 0x47c80000' \
+            'dtb address: 0x0000000047c80000' \
+            'vendor bootconfig size: 0'; do
+            grep -Fqx "$EXPECTED" "$ARTIFACTS/verify-report.txt" || {
+              echo "ERROR: stock vendor_boot header mismatch: $EXPECTED"
+              exit 1
+            }
+          done
 
           python3 - "$IMAGE" "$PLATFORM_SHA256" "$DTB_SHA256" "$LIMIT" <<'PY'
           import hashlib
@@ -528,7 +562,7 @@ jobs:
               fail(f"DTB SHA-256 is {actual_dtb_sha256}, expected {dtb_sha256}")
 
           expected = [
-              ("platform", 1, platform_sha256),
+              ("", 1, platform_sha256),
               ("recovery", 2, None),
           ]
 
@@ -581,6 +615,10 @@ jobs:
             build-kansas.log \
             "$ARTIFACTS/build-kansas.log"
 
+          cp -f \
+            "$GITHUB_WORKSPACE/twrp-manifest-pinned.xml" \
+            "$ARTIFACTS/twrp-manifest-pinned.xml"
+
           (
             cd "$ARTIFACTS"
             sha256sum vendor_boot.img |
@@ -594,6 +632,20 @@ jobs:
             -type f \
             -printf '%10s  %f\n' |
             sort
+
+      - name: Save TWRP source and compiler caches
+        if: success()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.TWRP_SRC }}/.repo/project-objects
+            ${{ env.TWRP_SRC }}/.repo/projects
+            ${{ env.TWRP_SRC }}/.repo/manifests
+            ${{ env.TWRP_SRC }}/.repo/manifests.git
+            ${{ env.TWRP_SRC }}/out/soong
+            ${{ env.TWRP_SRC }}/out/target/product/kansas/obj
+          key: kansas-twrp-12.1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload unflashed build
         uses: actions/upload-artifact@v4
