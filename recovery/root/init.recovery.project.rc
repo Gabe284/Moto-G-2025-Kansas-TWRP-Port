@@ -1,3 +1,8 @@
 # Motorola Kansas TWRP project recovery hooks.
 #
 # Hardware initialization is retained in the stock platform vendor ramdisk.
+
+# Complete the configfs ADB gadget after FunctionFS is ready.
+on property:sys.usb.ffs.ready=1
+    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/ffs.adb
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
